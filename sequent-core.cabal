@@ -1,0 +1,25 @@
+name:                sequent-core
+version:             0.1.0.0
+license:             BSD3
+license-file:        LICENSE
+author:              Iavor S. Diatchki
+maintainer:          diatchki@galois.com
+build-type:          Simple
+cabal-version:       >=1.10
+
+library
+  hs-source-dirs:      src
+  exposed-modules:     SequentCore, SequentPlugin
+  build-depends:       base, ghc
+  default-language:    Haskell2010
+  ghc-options:         -Wall -O2
+
+
+executable Example
+  hs-source-dirs: examples
+  Main-is: Example.hs
+  build-depends: base, sequent-core
+
+  ghc-options: -Wall -fplugin=SequentPlugin -dcore-lint
+
+
