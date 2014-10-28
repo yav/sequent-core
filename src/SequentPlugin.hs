@@ -4,6 +4,9 @@ import GhcPlugins ( Plugin(installCoreToDos), CommandLineOption
                   , defaultPlugin
                   , reinitializeGlobals
                   , CoreM, CoreToDo(CoreDoPluginPass)
+                  , isBottomingId, idArity, isTypeArg
+                  , putMsg
+                  , Var
                   )
 import SequentCore
 
@@ -15,8 +18,13 @@ plugin = defaultPlugin {
 install :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]
 install opts todos =
   do reinitializeGlobals
-     return (CoreDoPluginPass "sequent-core-no-op" (sequentPass return) : todos)
+     return $ dump : todos ++ [dump]
+  where dump = CoreDoPluginPass "sequent-core-no-op" (sequentPass showSequentCore)
 
+showSequentCore :: [Bind Var] -> CoreM [Bind Var]
+showSequentCore bs = do
+  putMsg (ppr_binds_top bs)
+  return bs
 
 -- | Inline the continuation of a case into all of its branches.
 inlineCaseCont :: Command b -> Maybe (Command b)
@@ -38,13 +46,15 @@ commandIsBottom cmd =
     Var v -> isBottomingId v && contArgs (cmdCont cmd) >= idArity v
     _     -> False
 
+contArgs = undefined
+{-
 -- | How many immediatly visible arguments we have in a continuation.
 contArgs :: [Frame b] -> Int
-contArgs fs = length [ () | App a <- takeWhile notCase fs, not isTypeArg a ]
+contArgs fs = length [ () | App a <- takeWhile notCase fs, not (isTypeArg a) ]
   where notCase (Case {}) = False
         notCase _         = True
 
 
-
+-}
 
 

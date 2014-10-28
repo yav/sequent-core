@@ -5,9 +5,12 @@ import GhcPlugins ( CoreM
                   , ModGuts
                   , bindsOnlyPass
                   , deShadowBinds
+                  , sLit, pprLiteral
                   )
 import qualified GhcPlugins as GHC
+import Outputable
 
+import Data.List
 
 sequentPass :: ([Bind Var] -> CoreM [Bind Var]) -> ModGuts -> CoreM ModGuts
 sequentPass process =
@@ -109,6 +112,107 @@ toCoreBinds = map toCoreBind
 toCoreAlt :: Alt b -> GHC.Alt b
 toCoreAlt (Alt ac bs c) = (ac, bs, commandToCoreExpr c)
 
+ppr_bind :: OutputableBndr b => Bind b -> SDoc
+ppr_bind (NonRec val_bdr expr) = ppr_binding (val_bdr, expr)
+ppr_bind (Rec binds)           = hang (text "rec") 2 (vcat $ intersperse space $ ppr_block "{" ";" "}" (map ppr_binding binds))
 
+ppr_binds_top :: OutputableBndr b => [Bind b] -> SDoc
+ppr_binds_top binds = ppr_binds_with "" "" "" binds
 
+ppr_block :: String -> String -> String -> [SDoc] -> [SDoc]
+ppr_block open mid close [] = [text open <> text close]
+ppr_block open mid close (first : rest)
+  = text open <+> first : map (text mid <+>) rest ++ [text close]
+
+ppr_binds :: OutputableBndr b => [Bind b] -> SDoc
+ppr_binds binds = ppr_binds_with "{" ";" "}" binds
+
+ppr_binds_with :: OutputableBndr b => String -> String -> String -> [Bind b] -> SDoc
+ppr_binds_with open mid close binds = vcat $ intersperse space $ ppr_block open mid close (map ppr_bind binds)
+
+ppr_binding :: OutputableBndr b => (b, Command b) -> SDoc
+ppr_binding (val_bdr, expr)
+  = pprBndr LetBind val_bdr $$
+    hang (ppr val_bdr <+> equals) 2 (pprCoreComm expr)
+
+ppr_comm :: OutputableBndr b => (SDoc -> SDoc) -> Command b -> SDoc
+ppr_comm add_par comm
+  = maybe_add_par $ ppr_let <+> cut (cmdValue comm) (cmdCont comm)
+  where
+    ppr_let
+      = case cmdLet comm of
+          [] -> empty
+          binds -> hang (text "let") 2 (ppr_binds binds) $$ text "in"
+      {-
+      = hang (ptext keyword) 2 (ppr_bind bind <+> ptext (sLit "} in"))
+      where
+        keyword = case bind of
+                    Rec _ -> sLit "letrec"
+                    NonRec _ _ -> sLit "let"
+      -}
+    maybe_add_par = if null (cmdLet comm) then noParens else add_par
+    cut val frames
+      = cat [text "<" <> pprValue val, vcat $ ppr_block "|" ";" ">" $ map ppr_frame frames]
+    {-
+    cut val []
+      = [ptext (sLit "<") <> pprValue val <> ptext (sLit "|>")]
+    cut val (frame : cont)
+      = ptext (sLit "<") <> pprValue (cmdValue comm) :
+        ptext (sLit "|") <+> ppr_frame frame :
+        map (\frame -> semi <+> ppr_frame frame) cont ++
+        [ptext (sLit ">")]
+    -}
+
+ppr_value :: OutputableBndr b => (SDoc -> SDoc) -> Value b -> SDoc
+ppr_value _ (Var name) = ppr name
+ppr_value add_par (Type ty) = add_par $ ptext (sLit "@") <+> ppr ty
+ppr_value add_par (Coercion co) = add_par $ ptext (sLit "CO ...")
+ppr_value add_par (Lit lit) = pprLiteral add_par lit
+ppr_value add_par value@(Lam _ _)
+  = let
+      (bndrs, Just body) = collectBinders value
+    in
+      add_par $
+      hang (ptext (sLit "\\") <+> sep (map (pprBndr LambdaBind) bndrs) <+> arrow)
+          2 (pprCoreComm body)
+
+collectBinders :: Value b -> ([b], Maybe (Command b))
+collectBinders (Lam b comm)
+  = go [b] comm
+  where
+    go bs (Command { cmdLet = [], cmdCont = [], cmdValue = Lam b comm })
+      = go (b : bs) comm
+    go bs comm
+      = (reverse bs, Just comm)
+collectBinders val
+  = ([], Nothing)
+
+ppr_frame :: OutputableBndr b => Frame b -> SDoc
+ppr_frame (App comm)
+  = ptext (sLit "[] $") <+> pprParendComm comm
+ppr_frame (Case var _ alts)
+  = hang (ptext (sLit "case [] of") <+> pprBndr CaseBind var) 2 $
+      vcat $ ppr_block "{" ";" "}" (map pprCoreAlt alts)
+ppr_frame (Cast co)
+  = ptext (sLit "[] `cast` ...")
+ppr_frame (Tick ti)
+  = ptext (sLit "[] `tick` ...")
+
+pprCoreAlt :: OutputableBndr b => Alt b -> SDoc
+pprCoreAlt (Alt con args rhs)
+ = hang (ppr_case_pat con args <+> arrow) 2 (pprCoreComm rhs)
+
+ppr_case_pat :: OutputableBndr a => AltCon -> [a] -> SDoc
+ppr_case_pat con args
+  = ppr con <+> (fsep (map ppr_bndr args))
+  where
+    ppr_bndr = pprBndr CaseBind
+
+pprParendComm comm = ppr_comm parens comm
+pprCoreComm comm = ppr_comm noParens comm
+pprParendValue val = ppr_value parens val
+pprValue val = ppr_value noParens val
+
+noParens :: SDoc -> SDoc
+noParens pp = pp
 
